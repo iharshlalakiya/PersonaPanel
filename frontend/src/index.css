@@ -1,0 +1,54 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Global resets & design tokens ─────────────────────────────────── */
+:root {
+  --gradient-start: #1b184d;
+  --gradient-mid:   #322ba7;
+  --gradient-end:   #5c5ff5;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: 'Inter', system-ui, sans-serif;
+  background-color: #0d0d1a;
+  color: #e8e8f0;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Utility: animated gradient background ──────────────────────────── */
+.gradient-bg {
+  background: linear-gradient(135deg, var(--gradient-start), var(--gradient-mid), var(--gradient-end));
+  background-size: 300% 300%;
+  animation: gradientShift 10s ease infinite;
+}
+
+@keyframes gradientShift {
+  0%   { background-position: 0% 50%; }
+  50%  { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+/* ── Glassmorphism card ─────────────────────────────────────────────── */
+.glass-card {
+  background: rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 1rem;
+}
+
+/* ── Status badge colours ───────────────────────────────────────────── */
+.badge-ok    { @apply bg-emerald-500/20 text-emerald-300 border border-emerald-500/30; }
+.badge-error { @apply bg-red-500/20     text-red-300     border border-red-500/30; }
+.badge-idle  { @apply bg-slate-500/20   text-slate-300   border border-slate-500/30; }
