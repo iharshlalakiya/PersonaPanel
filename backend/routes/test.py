@@ -7,26 +7,34 @@ POST /api/test/capture
 
 POST /api/test/persona
     Body:    { "url": "https://example.com" }
-    Returns: Skeptical Buyer reaction (single persona, for quick iteration)
+    Returns: Skeptical Buyer reaction (single, quick iteration)
 
-POST /api/test/run
+POST /api/test/run   ← MAIN PIPELINE
     Body:    { "url": "https://example.com" }
-             { "url": "...", "personas": ["Skeptical Buyer", "Price-Sensitive Shopper"] }
+             { "url": "...", "personas": ["Skeptical Buyer", ...] }
+    Runs:    Capture → 5 personas in parallel → synthesis → Supabase write
     Returns: {
-        "ok": bool,
-        "screenshot_url": str,
-        "capture_time_s": float,
-        "personas_time_s": float,   ← proves parallelism (≈ 1 persona, not 5×)
-        "total_time_s": float,
-        "results": [ ...5 persona dicts... ]
+        "ok", "url", "screenshot_url",
+        "session_id",               ← Supabase test_sessions row ID
+        "capture_time_s",
+        "personas_time_s",          ← proves parallelism (≈ 1×, not 5×)
+        "synthesis_time_s",
+        "persist_time_s",
+        "total_time_s",
+        "personas_run",
+        "persona_results": [...],
+        "synthesis": { top_priority_issues, persona_specific_issues,
+                       overall_conversion_risk_score, summary },
+        "db_errors": [...]          ← non-empty only if Supabase write partially failed
     }
 
-These routes are intentionally unauthenticated for Postman/curl testing.
+These routes are intentionally unauthenticated.
 Remove or auth-gate before going to production.
 """
 from __future__ import annotations
 
 import asyncio
+import functools
 import time
 
 from fastapi import APIRouter
@@ -34,7 +42,8 @@ from pydantic import BaseModel
 
 from agents.capture_agent import capture_page
 from agents.persona_agent import SKEPTICAL_BUYER, run_all_personas, run_persona
-from agents.personas_config import ALL_PERSONAS
+from agents.synthesis_agent import synthesize_results
+from db.persistence import save_full_run
 
 router = APIRouter()
 
@@ -45,6 +54,13 @@ router = APIRouter()
 
 class UrlRequest(BaseModel):
     url: str
+
+
+class FrictionPoint(BaseModel):
+    issue: str
+    severity: str
+    quote_or_element: str
+    suggested_fix: str
 
 
 # ---------------------------------------------------------------------------
@@ -66,20 +82,14 @@ async def capture(body: UrlRequest) -> CaptureResponse:
          -H 'Content-Type: application/json' \\
          -d '{"url": "https://stripe.com"}'
     """
-    result = capture_page(body.url)
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, capture_page, body.url)
     return CaptureResponse(**result)
 
 
 # ---------------------------------------------------------------------------
-# POST /api/test/persona  (single Skeptical Buyer — kept for quick iteration)
+# POST /api/test/persona  (single Skeptical Buyer — quick iteration)
 # ---------------------------------------------------------------------------
-
-class FrictionPoint(BaseModel):
-    issue: str
-    severity: str
-    quote_or_element: str
-    suggested_fix: str
-
 
 class PersonaResponse(BaseModel):
     ok: bool
@@ -109,7 +119,6 @@ async def persona_single(body: UrlRequest) -> PersonaResponse:
     screenshot_url = capture_result["screenshot_url"]
     extracted_text = capture_result["extracted_text"] or ""
 
-    import functools
     persona_result = await loop.run_in_executor(
         None, functools.partial(run_persona, SKEPTICAL_BUYER, screenshot_url, extracted_text)
     )
@@ -129,13 +138,36 @@ async def persona_single(body: UrlRequest) -> PersonaResponse:
 
 
 # ---------------------------------------------------------------------------
-# POST /api/test/run  ← main endpoint: capture + ALL 5 personas in parallel
+# POST /api/test/run — full pipeline
 # ---------------------------------------------------------------------------
 
 class RunRequest(BaseModel):
     url: str
-    # Optional: pass a subset of persona names to run only those
-    personas: list[str] | None = None
+    personas: list[str] | None = None   # None → run all 5
+    user_id: str | None = None          # optional auth — pass JWT sub if available
+
+
+class TopPriorityIssue(BaseModel):
+    issue: str
+    flagged_by: list[str]
+    severity: str
+    suggested_fix: str
+
+
+class PersonaSpecificIssue(BaseModel):
+    issue: str
+    flagged_by: str
+    severity: str
+    suggested_fix: str
+
+
+class SynthesisResult(BaseModel):
+    ok: bool
+    top_priority_issues: list[TopPriorityIssue] | None = None
+    persona_specific_issues: list[PersonaSpecificIssue] | None = None
+    overall_conversion_risk_score: int | None = None
+    summary: str | None = None
+    error: str | None = None
 
 
 class PersonaResult(BaseModel):
@@ -152,25 +184,32 @@ class RunResponse(BaseModel):
     ok: bool
     url: str
     screenshot_url: str | None = None
-    # Timing metadata — proves parallelism
+    session_id: str | None = None        # Supabase test_sessions PK
+    # Timing breakdown
     capture_time_s: float | None = None
-    personas_time_s: float | None = None    # ≈ single persona time, not 5×
+    personas_time_s: float | None = None  # ≈ 1 persona RTT, not 5×
+    synthesis_time_s: float | None = None
+    persist_time_s: float | None = None
     total_time_s: float | None = None
+    # Results
     personas_run: int = 0
-    results: list[PersonaResult] = []
+    persona_results: list[PersonaResult] = []
+    synthesis: SynthesisResult | None = None
+    db_errors: list[str] = []           # populated if Supabase writes partially failed
     error: str | None = None
 
 
 @router.post(
     "/run",
     response_model=RunResponse,
-    summary="Full pipeline: capture + all 5 personas in parallel",
+    summary="Full pipeline: capture → 5 personas in parallel → synthesis → Supabase",
     description=(
-        "Runs the Capture Agent then dispatches all 5 persona analyses "
-        "concurrently via asyncio.gather + ThreadPoolExecutor. "
-        "The `personas_time_s` field in the response proves true parallelism — "
-        "it should be ≈ the time of ONE persona call, not 5×. "
-        "Pass `personas` to filter which personas run."
+        "Runs the complete PersonaPanel analysis pipeline: "
+        "(1) Capture Agent — Playwright screenshot + text extraction. "
+        "(2) All 5 persona agents concurrently via asyncio.gather + ThreadPoolExecutor. "
+        "(3) Synthesis Agent — cross-persona aggregation, risk score, summary. "
+        "(4) Supabase write — test_sessions, persona_results, synthesis_results. "
+        "Timing fields prove parallelism: personas_time_s ≈ ONE persona call, not 5×."
     ),
 )
 async def run_all(body: RunRequest) -> RunResponse:
@@ -179,47 +218,74 @@ async def run_all(body: RunRequest) -> RunResponse:
          -H 'Content-Type: application/json' \\
          -d '{"url": "https://stripe.com"}' | python -m json.tool
 
-    With persona filter:
-        -d '{"url": "https://stripe.com", "personas": ["Skeptical Buyer", "Price-Sensitive Shopper"]}'
+    Filter personas:
+        -d '{"url": "...", "personas": ["Skeptical Buyer", "Price-Sensitive Shopper"]}'
 
-    Expect ~30-50 s total (dominated by capture + one Gemini RTT, not 5×).
+    Expect ~40-60 s total (capture ~10-15s, personas ~20-30s, synthesis ~5-10s).
     """
     wall_start = time.perf_counter()
-
-    # ── Step 1: Capture (blocking → thread) ──────────────────────────────
     loop = asyncio.get_event_loop()
+
+    # ── Step 1: Capture ───────────────────────────────────────────────────
     t0 = time.perf_counter()
     capture_result = await loop.run_in_executor(None, capture_page, body.url)
     capture_time = time.perf_counter() - t0
 
     if not capture_result["ok"]:
         return RunResponse(
-            ok=False,
-            url=body.url,
+            ok=False, url=body.url,
             capture_time_s=round(capture_time, 2),
             error=f"Capture failed: {capture_result['error']}",
         )
 
-    screenshot_url: str = capture_result["screenshot_url"]
-    extracted_text: str = capture_result["extracted_text"] or ""
+    screenshot_url: str  = capture_result["screenshot_url"]
+    extracted_text: str  = capture_result["extracted_text"] or ""
 
-    # ── Step 2: Run all personas concurrently ────────────────────────────
+    # ── Step 2: All personas in parallel ─────────────────────────────────
     t1 = time.perf_counter()
     persona_results: list[dict] = await run_all_personas(
         screenshot_input=screenshot_url,
         extracted_text=extracted_text,
-        selected_names=body.personas,   # None → run all 5
+        selected_names=body.personas,
     )
     personas_time = time.perf_counter() - t1
-    total_time    = time.perf_counter() - wall_start
+
+    # ── Step 3: Synthesis ─────────────────────────────────────────────────
+    t2 = time.perf_counter()
+    synthesis: dict = await loop.run_in_executor(
+        None,
+        functools.partial(synthesize_results, persona_results),
+    )
+    synthesis_time = time.perf_counter() - t2
+
+    # ── Step 4: Persist to Supabase ───────────────────────────────────────
+    t3 = time.perf_counter()
+    db_result: dict = await loop.run_in_executor(
+        None,
+        functools.partial(
+            save_full_run,
+            body.url,
+            screenshot_url,
+            persona_results,
+            synthesis,
+            body.user_id,
+        ),
+    )
+    persist_time = time.perf_counter() - t3
+    total_time   = time.perf_counter() - wall_start
 
     return RunResponse(
         ok=True,
         url=body.url,
         screenshot_url=screenshot_url,
+        session_id=db_result.get("session_id"),
         capture_time_s=round(capture_time, 2),
         personas_time_s=round(personas_time, 2),
+        synthesis_time_s=round(synthesis_time, 2),
+        persist_time_s=round(persist_time, 2),
         total_time_s=round(total_time, 2),
         personas_run=len(persona_results),
-        results=[PersonaResult(**r) for r in persona_results],
+        persona_results=[PersonaResult(**r) for r in persona_results],
+        synthesis=SynthesisResult(**{k: synthesis.get(k) for k in SynthesisResult.model_fields}),
+        db_errors=db_result.get("errors", []),
     )
