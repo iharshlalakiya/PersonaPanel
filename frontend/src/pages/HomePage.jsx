@@ -1,16 +1,9 @@
 import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { useAuth } from '../context/AuthContext.jsx'
+import { Link } from 'react-router-dom'
 import api from '../api/client.js'
+import Nav from '../components/Nav.jsx'
 
 /* ── tiny icon components ──────────────────────────────────────────── */
-const SparkleIcon = () => (
-  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-    <path strokeLinecap="round" strokeLinejoin="round"
-      d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.847a4.5 4.5 0 003.09 3.09L15.75 12l-2.847.813a4.5 4.5 0 00-3.09 3.09z" />
-  </svg>
-)
-
 const UserGroupIcon = () => (
   <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
     <path strokeLinecap="round" strokeLinejoin="round"
@@ -64,8 +57,6 @@ function FeatureCard({ icon, title, description }) {
 
 /* ── Main page ─────────────────────────────────────────────────────── */
 export default function HomePage() {
-  const { auth, logout } = useAuth()
-  const navigate = useNavigate()
   const [apiStatus, setApiStatus] = useState('idle')
   const [apiData, setApiData]     = useState(null)
 
@@ -81,49 +72,30 @@ export default function HomePage() {
     }
   }
 
-  // Auto-ping on mount
   useEffect(() => { checkHealth() }, [])
 
   return (
     <div className="min-h-screen gradient-bg flex flex-col">
-      {/* ── Nav ── */}
-      <nav className="flex items-center justify-between px-8 py-5 border-b border-white/10">
-        <div className="flex items-center gap-2 font-bold text-xl tracking-tight text-white">
-          <SparkleIcon />
-          PersonaPanel
-        </div>
-        <div className="flex items-center gap-4">
+      <Nav actions={
+        <div className="flex items-center gap-3">
           <ApiStatusBadge status={apiStatus} />
           <button
             id="btn-check-health"
             onClick={checkHealth}
-            className="text-sm font-medium px-4 py-2 rounded-lg bg-brand-600 hover:bg-brand-500 transition-colors text-white"
+            className="text-sm font-medium px-3 py-2 rounded-lg border border-white/15
+                       hover:border-white/30 transition-colors text-slate-300 hover:text-white"
           >
             Ping API
           </button>
-          {auth && (
-            <>
-              <span className="text-xs text-slate-400 hidden sm:block">{auth.email}</span>
-              <button
-                id="btn-logout"
-                onClick={() => { logout(); navigate('/login') }}
-                className="text-sm font-medium px-4 py-2 rounded-lg border border-white/20 hover:border-white/40 transition-colors text-white"
-              >
-                Log out
-              </button>
-            </>
-          )}
         </div>
-      </nav>
+      } />
 
       {/* ── Hero ── */}
       <main className="flex-1 flex flex-col items-center justify-center px-6 text-center gap-8 py-20">
-        {/* Badge */}
         <span className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-brand-600/20 border border-brand-500/30 text-brand-300 text-sm font-medium">
-          <SparkleIcon /> AI-Powered Synthetic User Testing
+          ✦ AI-Powered Synthetic User Testing
         </span>
 
-        {/* Heading */}
         <h1 className="text-5xl sm:text-6xl font-extrabold text-white max-w-3xl leading-tight">
           Test your product with{' '}
           <span className="text-transparent bg-clip-text bg-gradient-to-r from-brand-300 to-purple-400">
@@ -133,42 +105,39 @@ export default function HomePage() {
         </h1>
 
         <p className="text-lg text-slate-400 max-w-xl leading-relaxed">
-          PersonaPanel generates diverse synthetic users, runs them through your app,
-          and surfaces rich qualitative &amp; quantitative insights — all before you talk to a
-          single real customer.
+          PersonaPanel generates diverse synthetic users, runs them through your landing page,
+          and surfaces rich qualitative insights — all before you talk to a single real customer.
         </p>
 
-        {/* CTA */}
         <div className="flex flex-wrap gap-4 justify-center">
-          <button
-            id="btn-get-started"
-            className="px-8 py-3 rounded-xl bg-brand-600 hover:bg-brand-500 transition-colors text-white font-semibold shadow-lg shadow-brand-900/40"
+          <Link
+            id="btn-run-new-test"
+            to="/new-test"
+            className="px-8 py-3 rounded-xl bg-brand-600 hover:bg-brand-500 transition-all
+                       text-white font-semibold shadow-lg shadow-brand-900/40
+                       hover:shadow-xl hover:shadow-brand-700/30"
           >
-            Get Started
-          </button>
-          <button
+            Run New Test →
+          </Link>
+          <a
             id="btn-view-docs"
+            href="http://localhost:8001/docs"
+            target="_blank"
+            rel="noreferrer"
             className="px-8 py-3 rounded-xl border border-white/20 hover:border-white/40 transition-colors text-white font-semibold"
           >
-            View Docs
-          </button>
+            API Docs
+          </a>
         </div>
 
-        {/* API health result */}
         {apiData && (
-          <div
-            id="health-result"
-            className="glass-card px-6 py-4 text-sm font-mono text-emerald-300 mt-2"
-          >
+          <div id="health-result" className="glass-card px-6 py-4 text-sm font-mono text-emerald-300 mt-2">
             GET /api/health → {JSON.stringify(apiData)}
           </div>
         )}
         {apiStatus === 'error' && (
-          <div
-            id="health-error"
-            className="glass-card px-6 py-4 text-sm font-mono text-red-300 mt-2"
-          >
-            Could not reach the backend. Is it running on port 8000?
+          <div id="health-error" className="glass-card px-6 py-4 text-sm font-mono text-red-300 mt-2">
+            Could not reach the backend. Is it running on port 8001?
           </div>
         )}
       </main>
@@ -177,18 +146,18 @@ export default function HomePage() {
       <section className="px-8 pb-20 grid grid-cols-1 sm:grid-cols-3 gap-6 max-w-5xl mx-auto w-full">
         <FeatureCard
           icon={<UserGroupIcon />}
-          title="Diverse Personas"
-          description="Generate users across demographics, tech-literacy levels, and behaviour archetypes with a single click."
+          title="5 Diverse Personas"
+          description="Skeptical Buyer, Confused First-Timer, Price-Sensitive Shopper, Mobile Scroller, and Detail Researcher — all in one run."
         />
         <FeatureCard
           icon={<BeakerIcon />}
-          title="Automated Sessions"
-          description="Playwright-powered agents browse your app autonomously, simulating real interaction patterns."
+          title="Parallel Analysis"
+          description="All 5 personas run concurrently via asyncio.gather — total time ≈ one persona call, not 5×."
         />
         <FeatureCard
           icon={<ChartBarIcon />}
-          title="Actionable Insights"
-          description="Get per-persona sentiment, task-completion rates, and Gemini-summarised pain-point reports."
+          title="Synthesised Insights"
+          description="Cross-persona friction aggregation, conversion risk score (0-100), and an executive summary — all in one API call."
         />
       </section>
     </div>
