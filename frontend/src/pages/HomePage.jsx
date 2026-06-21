@@ -1,4 +1,6 @@
 import { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { useAuth } from '../context/AuthContext.jsx'
 import api from '../api/client.js'
 
 /* ── tiny icon components ──────────────────────────────────────────── */
@@ -62,6 +64,8 @@ function FeatureCard({ icon, title, description }) {
 
 /* ── Main page ─────────────────────────────────────────────────────── */
 export default function HomePage() {
+  const { auth, logout } = useAuth()
+  const navigate = useNavigate()
   const [apiStatus, setApiStatus] = useState('idle')
   const [apiData, setApiData]     = useState(null)
 
@@ -97,6 +101,18 @@ export default function HomePage() {
           >
             Ping API
           </button>
+          {auth && (
+            <>
+              <span className="text-xs text-slate-400 hidden sm:block">{auth.email}</span>
+              <button
+                id="btn-logout"
+                onClick={() => { logout(); navigate('/login') }}
+                className="text-sm font-medium px-4 py-2 rounded-lg border border-white/20 hover:border-white/40 transition-colors text-white"
+              >
+                Log out
+              </button>
+            </>
+          )}
         </div>
       </nav>
 

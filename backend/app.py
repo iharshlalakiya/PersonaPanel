@@ -25,8 +25,13 @@ app.add_middleware(
 )
 
 # ---------------------------------------------------------------------------
-# Routers  (import each sub-router here as the project grows)
+# Routers
 # ---------------------------------------------------------------------------
+from routes.auth import router as auth_router
+from routes.test import router as test_router
+
+app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
+app.include_router(test_router, prefix="/api/test", tags=["test"])
 # from routes.personas import router as personas_router
 # app.include_router(personas_router, prefix="/api/personas", tags=["personas"])
 
