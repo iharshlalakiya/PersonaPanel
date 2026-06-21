@@ -30,3 +30,13 @@ def get_test_results(session_id: str) -> dict:
         }
     except Exception as exc:
         return {"ok": False, "error": f"Failed to fetch results: {exc}\n{traceback.format_exc()}"}
+
+def get_user_history(user_id: str) -> dict:
+    """
+    Fetch all test sessions for a given user, ordered by creation date descending.
+    """
+    try:
+        resp = supabase.table("test_sessions").select("*").eq("user_id", user_id).order("created_at", desc=True).execute()
+        return {"ok": True, "history": resp.data, "error": None}
+    except Exception as exc:
+        return {"ok": False, "error": f"Failed to fetch history: {exc}\n{traceback.format_exc()}"}

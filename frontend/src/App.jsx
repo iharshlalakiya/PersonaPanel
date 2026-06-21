@@ -3,6 +3,7 @@ import HomePage from './pages/HomePage.jsx'
 import LoginPage from './pages/LoginPage.jsx'
 import NewTestPage from './pages/NewTestPage.jsx'
 import ResultsPage from './pages/ResultsPage.jsx'
+import HistoryPage from './pages/HistoryPage.jsx'
 import ProtectedRoute from './components/ProtectedRoute.jsx'
 
 export default function App() {
@@ -16,6 +17,10 @@ export default function App() {
 
       <Route path="/new-test" element={
         <ProtectedRoute><NewTestPage /></ProtectedRoute>
+      } />
+
+      <Route path="/history" element={
+        <ProtectedRoute><HistoryPage /></ProtectedRoute>
       } />
 
       <Route path="/results/:id" element={

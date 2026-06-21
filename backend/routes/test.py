@@ -291,10 +291,28 @@ async def run_all(body: RunRequest) -> RunResponse:
     )
 
 # ---------------------------------------------------------------------------
-# GET /api/test/{test_id}
+# GET /api/test/history
 # ---------------------------------------------------------------------------
 
-from db.get_results import get_test_results
+from db.get_results import get_test_results, get_user_history
+
+@router.get("/history", summary="Fetch all past test sessions for a user")
+async def get_history(user_id: str):
+    """
+    Retrieves all past test sessions for the logged in user.
+    """
+    if not user_id:
+        return {"ok": False, "error": "user_id is required"}
+        
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, get_user_history, user_id)
+    if not result["ok"]:
+        return {"ok": False, "error": result["error"]}
+    return result
+
+# ---------------------------------------------------------------------------
+# GET /api/test/{test_id}
+# ---------------------------------------------------------------------------
 
 @router.get("/{test_id}", summary="Fetch saved test results from Supabase")
 async def get_results(test_id: str):

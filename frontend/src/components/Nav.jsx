@@ -39,6 +39,12 @@ export default function Nav({ actions }) {
         {auth && (
           <>
             <Link
+              to="/history"
+              className="text-sm font-medium px-3 py-2 rounded-lg text-slate-300 hover:text-white transition-colors"
+            >
+              History
+            </Link>
+            <Link
               to="/new-test"
               className="hidden sm:inline-flex items-center gap-1.5 text-sm font-medium px-4 py-2 rounded-lg
                          bg-brand-600 hover:bg-brand-500 transition-colors text-white shadow-lg shadow-brand-900/30"
