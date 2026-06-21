@@ -98,12 +98,18 @@ export default function HistoryPage() {
         </div>
 
         {loading ? (
-          <div className="flex justify-center py-20">
-            <div className="animate-pulse flex items-center gap-2">
-              <div className="w-2 h-2 bg-brand-400 rounded-full animate-bounce" />
-              <div className="w-2 h-2 bg-brand-400 rounded-full animate-bounce" style={{ animationDelay: '0.15s'}} />
-              <div className="w-2 h-2 bg-brand-400 rounded-full animate-bounce" style={{ animationDelay: '0.3s'}} />
-            </div>
+          <div className="flex flex-col gap-3 animate-pulse">
+            {[1, 2, 3].map(i => (
+              <div key={i} className="glass-card p-5 border-l-4 border-l-white/10">
+                <div className="flex items-center justify-between gap-4">
+                  <div className="flex-1">
+                    <div className="h-5 w-64 bg-white/5 rounded mb-2"></div>
+                    <div className="h-3 w-32 bg-white/5 rounded"></div>
+                  </div>
+                  <div className="h-6 w-24 bg-white/5 rounded"></div>
+                </div>
+              </div>
+            ))}
           </div>
         ) : error ? (
           <div className="glass-card p-6 border-red-500/30 text-center">

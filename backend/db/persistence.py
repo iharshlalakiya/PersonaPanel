@@ -57,7 +57,7 @@ def save_test_session(
         return {"ok": True, "id": session_id, "error": None}
 
     except Exception as exc:
-        return {"ok": False, "id": None, "error": f"save_test_session failed: {exc}\n{traceback.format_exc()}"}
+        return {"ok": False, "id": None, "error": f"save_test_session failed: {exc}"}
 
 
 # ---------------------------------------------------------------------------
@@ -79,15 +79,23 @@ def save_persona_results(
         rows = []
         for r in persona_results:
             if not r.get("ok"):
-                continue   # skip failed personas
-            rows.append({
-                "test_session_id": test_session_id,
-                "persona_name":    r["persona_name"],
-                "friction_points": r.get("friction_points") or [],
-                "positive_signals": r.get("positive_signals") or [],
-                "would_convert":   bool(r.get("would_convert", False)),
-                "gut_reaction":    r.get("gut_reaction") or "",
-            })
+                rows.append({
+                    "test_session_id": test_session_id,
+                    "persona_name":    r.get("persona_name") or "Unknown Persona",
+                    "friction_points": [],
+                    "positive_signals": [],
+                    "would_convert":   False,
+                    "gut_reaction":    f"Unavailable: {r.get('error')}",
+                })
+            else:
+                rows.append({
+                    "test_session_id": test_session_id,
+                    "persona_name":    r["persona_name"],
+                    "friction_points": r.get("friction_points") or [],
+                    "positive_signals": r.get("positive_signals") or [],
+                    "would_convert":   bool(r.get("would_convert", False)),
+                    "gut_reaction":    r.get("gut_reaction") or "",
+                })
 
         if not rows:
             return {"ok": True, "inserted": 0, "error": None}
@@ -98,7 +106,7 @@ def save_persona_results(
     except Exception as exc:
         return {
             "ok": False, "inserted": 0,
-            "error": f"save_persona_results failed: {exc}\n{traceback.format_exc()}",
+            "error": f"save_persona_results failed: {exc}",
         }
 
 
@@ -138,7 +146,7 @@ def save_synthesis_result(
     except Exception as exc:
         return {
             "ok": False, "id": None,
-            "error": f"save_synthesis_result failed: {exc}\n{traceback.format_exc()}",
+            "error": f"save_synthesis_result failed: {exc}",
         }
 
 

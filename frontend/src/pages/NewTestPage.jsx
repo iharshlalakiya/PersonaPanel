@@ -215,7 +215,13 @@ export default function NewTestPage() {
   }
 
   const selectedNames = PERSONAS.filter(p => selected[p.key]).map(p => p.name)
-  const isValidUrl = url.trim().startsWith('http://') || url.trim().startsWith('https://')
+  let isValidUrl = false
+  try {
+    const parsed = new URL(url.trim())
+    isValidUrl = parsed.protocol === 'http:' || parsed.protocol === 'https:'
+  } catch (_) {
+    isValidUrl = false
+  }
   const canSubmit  = isValidUrl && selectedNames.length > 0 && phase === 'idle'
 
   async function handleSubmit(e) {
@@ -317,7 +323,7 @@ export default function NewTestPage() {
               />
             </div>
             {url && !isValidUrl && (
-              <p className="text-xs text-red-400 mt-1.5">Must start with https:// or http://</p>
+              <p className="text-xs text-red-400 mt-1.5">Please enter a valid URL (e.g. https://example.com)</p>
             )}
           </section>
 

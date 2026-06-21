@@ -56,7 +56,7 @@ function FeatureCard({ icon, title, description }) {
 }
 
 /* ── Main page ─────────────────────────────────────────────────────── */
-export default function HomePage() {
+export default function DashboardPage() {
   const [apiStatus, setApiStatus] = useState('idle')
   const [apiData, setApiData]     = useState(null)
 

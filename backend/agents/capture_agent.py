@@ -291,7 +291,7 @@ def capture_page(url: str) -> dict:
 
     except Exception as exc:
         # Catch-all so we never crash the API
-        return _err(f"Unexpected error during page capture: {exc}\n{traceback.format_exc()}")
+        return _err(f"Unexpected error during page capture: {exc}")
 
 
 def _err(message: str) -> dict:

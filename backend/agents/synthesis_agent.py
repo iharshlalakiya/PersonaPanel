@@ -327,7 +327,7 @@ def synthesize_results(persona_results: list[dict]) -> dict:
         }
 
     except Exception as exc:
-        return _err(f"Unexpected error during synthesis: {exc}\n{traceback.format_exc()}")
+        return _err(f"Unexpected error during synthesis: {exc}")
 
 
 def _err(message: str) -> dict:

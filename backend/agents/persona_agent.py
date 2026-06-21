@@ -316,7 +316,7 @@ def run_persona(
         }
 
     except Exception as exc:
-        return _err(persona_name, f"Unexpected error: {exc}\n{traceback.format_exc()}")
+        return _err(persona_name, f"Unexpected error: {exc}")
 
 
 # ---------------------------------------------------------------------------

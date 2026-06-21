@@ -165,12 +165,28 @@ export default function ResultsPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-[#0d0d1a] flex items-center justify-center text-slate-400">
-        <div className="animate-pulse flex items-center gap-2">
-          <div className="w-2 h-2 bg-brand-400 rounded-full animate-bounce" />
-          <div className="w-2 h-2 bg-brand-400 rounded-full animate-bounce" style={{ animationDelay: '0.15s'}} />
-          <div className="w-2 h-2 bg-brand-400 rounded-full animate-bounce" style={{ animationDelay: '0.3s'}} />
-        </div>
+      <div className="min-h-screen bg-[#0d0d1a] flex flex-col pb-20">
+        <Nav />
+        <main className="max-w-6xl mx-auto w-full px-6 pt-10 animate-pulse">
+          <div className="mb-8">
+            <div className="h-10 w-64 bg-white/5 rounded mb-2"></div>
+            <div className="h-4 w-48 bg-white/5 rounded"></div>
+          </div>
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-12">
+            <div className="lg:col-span-1 h-[400px] bg-white/5 rounded glass-card"></div>
+            <div className="lg:col-span-2 glass-card p-8 flex flex-col justify-center">
+              <div className="flex flex-col sm:flex-row items-center gap-8 mb-8">
+                <div className="w-32 h-32 rounded-full bg-white/5 shrink-0"></div>
+                <div className="flex-1 w-full space-y-3">
+                  <div className="h-6 w-48 bg-white/5 rounded"></div>
+                  <div className="h-4 w-full bg-white/5 rounded"></div>
+                  <div className="h-4 w-5/6 bg-white/5 rounded"></div>
+                  <div className="h-4 w-4/6 bg-white/5 rounded"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </main>
       </div>
     )
   }
