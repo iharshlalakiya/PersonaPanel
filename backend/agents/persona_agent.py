@@ -4,57 +4,50 @@ persona_agent.py — Persona Analysis Agent for PersonaPanel
 
 Public API
 ----------
-    result = run_persona(persona_config, screenshot_bytes_or_url, extracted_text)
+Sync (single persona):
+    result = run_persona(persona_config, screenshot_input, extracted_text)
 
-Parameters
-----------
-persona_config : dict
-    Configuration describing the persona. Required keys:
-        "name"         (str)  — display name, e.g. "Skeptical Buyer"
-        "description"  (str)  — one-paragraph character description
-        "focus"        (str)  — what this persona pays attention to
-        "red_flags"    (list[str]) — triggers that make them distrust / leave
-        "green_flags"  (list[str]) — signals that build their confidence
+Async (all personas in parallel):
+    results = await run_all_personas(screenshot_input, extracted_text)
+    results = await run_all_personas(screenshot_input, extracted_text,
+                                     selected_names=["Skeptical Buyer", ...])
 
-screenshot_input : str | bytes
-    Either:
-      - Raw PNG bytes (e.g. captured in memory)
-      - A public HTTPS URL string pointing to the screenshot image
-      Both are handled transparently.
+Why thread pool for parallelism
+--------------------------------
+`run_persona` calls the *synchronous* Gemini SDK (google-generativeai 0.7.x
+uses blocking HTTP). To run 5 of them truly in parallel inside an async
+FastAPI endpoint we push each call onto the thread pool with
+`loop.run_in_executor`, then `asyncio.gather` all futures.
+This gives wall-clock time ≈ the slowest single call, not 5× sequential time.
 
-extracted_text : str
-    Visible text scraped from the page (from capture_agent).
-
-Returns
--------
-Always returns a dict:
+Return shape (per persona, always):
     {
         "ok": bool,
         "persona_name": str | None,
-        "friction_points": list[dict] | None,   # each: {issue, severity, quote_or_element, suggested_fix}
+        "friction_points": list[dict] | None,
         "positive_signals": list[str] | None,
         "would_convert": bool | None,
         "gut_reaction": str | None,
         "error": str | None,
     }
-
-Errors are returned in the dict — never raised — so the pipeline can always
-inspect `ok` without try/except.
 """
 
 from __future__ import annotations
 
-import base64
+import asyncio
 import json
 import os
 import re
 import traceback
-from typing import Any
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 
 import httpx
 import google.generativeai as genai
 from google.generativeai import protos
 from dotenv import load_dotenv
+
+from agents.personas_config import ALL_PERSONAS, PERSONA_REGISTRY
 
 load_dotenv()
 
@@ -66,48 +59,12 @@ genai.configure(api_key=_api_key)
 
 MODEL_NAME = "gemini-2.0-flash"
 
-# ---------------------------------------------------------------------------
-# Built-in persona definitions
-# ---------------------------------------------------------------------------
+# Thread pool shared across all concurrent persona calls.
+# 5 workers = one per persona; add more if you scale beyond 5.
+_EXECUTOR = ThreadPoolExecutor(max_workers=8, thread_name_prefix="persona")
 
-SKEPTICAL_BUYER: dict = {
-    "name": "Skeptical Buyer",
-    "description": (
-        "A cautious, evidence-driven consumer who has been burned by overpromising "
-        "products before. They read everything critically, distrust superlatives and "
-        "vague marketing language, and actively search for proof: real customer "
-        "reviews, concrete numbers, third-party validation, guarantees, and transparent "
-        "pricing. They will mentally exit the moment something feels 'too good to be true'."
-    ),
-    "focus": (
-        "Evidence quality (reviews, case studies, certifications), pricing transparency, "
-        "presence of guarantees or trials, social proof authenticity, specificity of "
-        "claims, and credibility signals like logos, certifications, and named customers."
-    ),
-    "red_flags": [
-        "Vague superlatives with no data ('the best', 'world-class', 'revolutionary')",
-        "Hidden pricing or 'contact us for pricing'",
-        "Generic stock-photo testimonials without names, roles, or companies",
-        "No refund policy or guarantee visible above the fold",
-        "Claims that seem exaggerated or unsubstantiated",
-        "Overly pushy CTAs with artificial urgency ('Limited time!' without a date)",
-        "No 'About Us' or company transparency",
-    ],
-    "green_flags": [
-        "Specific metrics with sources (e.g. '94% customer retention, n=1200')",
-        "Named customer logos with case studies or quotes",
-        "Transparent pricing with clear tier breakdowns",
-        "Free trial, money-back guarantee, or no-credit-card signup",
-        "Third-party certifications or press mentions",
-        "Founder story or team page that humanises the company",
-        "Concrete before/after comparisons or demo videos",
-    ],
-}
-
-# Registry — extend this dict when adding more personas
-PERSONA_REGISTRY: dict[str, dict] = {
-    "skeptical_buyer": SKEPTICAL_BUYER,
-}
+# Re-export for backwards-compat with existing imports
+SKEPTICAL_BUYER = PERSONA_REGISTRY["skeptical_buyer"]
 
 # ---------------------------------------------------------------------------
 # Prompt builder
@@ -131,7 +88,7 @@ _JSON_SCHEMA = """\
 
 
 def _build_system_prompt(persona: dict) -> str:
-    red_flags_block = "\n".join(f"  - {r}" for r in persona["red_flags"])
+    red_flags_block  = "\n".join(f"  - {r}" for r in persona["red_flags"])
     green_flags_block = "\n".join(f"  - {g}" for g in persona["green_flags"])
 
     return f"""\
@@ -161,8 +118,8 @@ visual design choices you can see. Do NOT make generic observations.
 
 CRITICAL RULES:
 - Every friction_point MUST include a real quote or specific element name from \
-the page in "quote_or_element". Generic observations like "the page lacks social \
-proof" without citing what IS (or isn't) there are NOT acceptable.
+the page in "quote_or_element". Generic observations without citing actual \
+page content are NOT acceptable.
 - severity must be exactly one of: low, medium, high
 - would_convert must be a JSON boolean (true or false, not a string)
 - gut_reaction must be written in FIRST PERSON as the persona speaking
@@ -176,7 +133,6 @@ fences, no explanation, no text before or after the JSON:
 
 
 def _build_user_message(extracted_text: str) -> str:
-    # Cap text so we stay well within token budget
     text_preview = extracted_text[:8_000] if extracted_text else "(no text extracted)"
     return (
         f"Please analyse this webpage as the persona described.\n\n"
@@ -187,41 +143,29 @@ def _build_user_message(extracted_text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Screenshot loading helper
+# Screenshot loading
 # ---------------------------------------------------------------------------
 
 def _load_image_bytes(screenshot_input: str | bytes) -> bytes:
-    """
-    Accepts either:
-      - bytes  → returned as-is
-      - str    → treated as a URL, downloaded with httpx
-    """
+    """bytes → returned as-is. str → treated as URL, downloaded."""
     if isinstance(screenshot_input, bytes):
         return screenshot_input
-
-    # It's a URL string
-    url = screenshot_input.strip()
-    resp = httpx.get(url, timeout=20, follow_redirects=True)
+    resp = httpx.get(screenshot_input.strip(), timeout=20, follow_redirects=True)
     resp.raise_for_status()
     return resp.content
 
 
 # ---------------------------------------------------------------------------
-# JSON extraction helper
+# JSON extraction
 # ---------------------------------------------------------------------------
 
 def _extract_json(text: str) -> dict | None:
-    """
-    Try to pull a JSON object out of *text*, even if Gemini wrapped it in
-    markdown fences or added surrounding prose.
-    """
-    # 1. Direct parse
+    """Robust JSON extraction — handles direct, fenced, and prose-wrapped output."""
     try:
         return json.loads(text.strip())
     except json.JSONDecodeError:
         pass
 
-    # 2. Strip ```json ... ``` fences
     fence = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
     if fence:
         try:
@@ -229,7 +173,6 @@ def _extract_json(text: str) -> dict | None:
         except json.JSONDecodeError:
             pass
 
-    # 3. Grab the first {...} block in the response
     brace = re.search(r"(\{.*\})", text, re.DOTALL)
     if brace:
         try:
@@ -241,7 +184,7 @@ def _extract_json(text: str) -> dict | None:
 
 
 # ---------------------------------------------------------------------------
-# Validation helper
+# Validation & normalisation
 # ---------------------------------------------------------------------------
 
 _REQUIRED_KEYS = {
@@ -252,88 +195,65 @@ _VALID_SEVERITIES = {"low", "medium", "high"}
 
 
 def _validate(data: dict, persona_name: str) -> dict:
-    """
-    Light-touch validation and normalisation of Gemini's JSON output.
-    Raises ValueError with a human-readable message on structural failure.
-    """
     missing = _REQUIRED_KEYS - data.keys()
     if missing:
         raise ValueError(f"Response missing keys: {missing}")
 
-    # Coerce types that Gemini sometimes gets wrong
     if isinstance(data["would_convert"], str):
         data["would_convert"] = data["would_convert"].strip().lower() == "true"
 
-    # Normalise persona_name to match config
     data["persona_name"] = persona_name
 
-    # Ensure friction_points is a list of dicts
     fps = data.get("friction_points", [])
     if not isinstance(fps, list):
         raise ValueError("friction_points must be a list")
     for i, fp in enumerate(fps):
         if not isinstance(fp, dict):
             raise ValueError(f"friction_points[{i}] must be a dict")
-        # Default missing sub-keys rather than erroring
         fp.setdefault("issue", "")
         fp.setdefault("severity", "medium")
         fp.setdefault("quote_or_element", "")
         fp.setdefault("suggested_fix", "")
         if fp["severity"] not in _VALID_SEVERITIES:
-            fp["severity"] = "medium"  # safe default
+            fp["severity"] = "medium"
 
-    # Ensure positive_signals is a list of strings
     ps = data.get("positive_signals", [])
-    if not isinstance(ps, list):
-        data["positive_signals"] = [str(ps)]
-    else:
-        data["positive_signals"] = [str(s) for s in ps]
+    data["positive_signals"] = [str(s) for s in ps] if isinstance(ps, list) else [str(ps)]
 
     return data
 
 
 # ---------------------------------------------------------------------------
-# Core Gemini call
+# Gemini call (sync — safe to call from thread pool)
 # ---------------------------------------------------------------------------
 
 def _call_gemini(
     model: genai.GenerativeModel,
-    system_prompt: str,
     user_message: str,
     image_bytes: bytes,
     strict: bool = False,
 ) -> str:
-    """
-    Send one request to Gemini with the screenshot + text.
-    Returns the raw response text.
-
-    If *strict* is True, a shorter "return ONLY valid JSON" prefix is prepended
-    to the user message (used on the retry).
-    """
     prefix = (
         "IMPORTANT: Return ONLY a valid JSON object. "
         "No markdown, no explanation, no extra text.\n\n"
         if strict else ""
     )
-
-    image_part = protos.Part(
-        inline_data=protos.Blob(mime_type="image/png", data=image_bytes)
-    )
-    text_part = protos.Part(text=prefix + user_message)
+    image_part = protos.Part(inline_data=protos.Blob(mime_type="image/png", data=image_bytes))
+    text_part  = protos.Part(text=prefix + user_message)
 
     response = model.generate_content(
         contents=[image_part, text_part],
         generation_config=genai.GenerationConfig(
-            temperature=0.4,          # lower = more deterministic / analytical
+            temperature=0.4,
             max_output_tokens=2048,
-            response_mime_type="application/json",  # enforce JSON output mode
+            response_mime_type="application/json",
         ),
     )
     return response.text
 
 
 # ---------------------------------------------------------------------------
-# Public function
+# Public sync function  — run ONE persona (blocking, thread-safe)
 # ---------------------------------------------------------------------------
 
 def run_persona(
@@ -342,51 +262,44 @@ def run_persona(
     extracted_text: str,
 ) -> dict:
     """
-    Run the given persona against the captured page data.
-
-    persona_config : dict  — use one of the PERSONA_REGISTRY values, or supply
-                             a custom config with the same keys.
-    screenshot_input : str | bytes  — public URL or raw PNG bytes.
-    extracted_text : str — text from capture_agent.
-
-    Returns a result dict (never raises).
+    Blocking. Safe to call from any thread.
+    Returns a result dict — never raises.
     """
     persona_name: str = persona_config.get("name", "Unknown Persona")
-
     try:
-        # ── 1. Load image ────────────────────────────────────────────────
+        # 1. Load image
         try:
             image_bytes = _load_image_bytes(screenshot_input)
         except Exception as exc:
             return _err(persona_name, f"Failed to load screenshot: {exc}")
 
-        # ── 2. Build prompt pieces ───────────────────────────────────────
+        # 2. Build prompts
         system_prompt = _build_system_prompt(persona_config)
-        user_message = _build_user_message(extracted_text)
+        user_message  = _build_user_message(extracted_text)
 
-        # ── 3. Init model ────────────────────────────────────────────────
+        # 3. Init model (lightweight object — fine to create per-call)
         model = genai.GenerativeModel(
             model_name=MODEL_NAME,
             system_instruction=system_prompt,
         )
 
-        # ── 4. First attempt ─────────────────────────────────────────────
-        raw_text = _call_gemini(model, system_prompt, user_message, image_bytes, strict=False)
-        parsed = _extract_json(raw_text)
+        # 4. First attempt
+        raw_text = _call_gemini(model, user_message, image_bytes, strict=False)
+        parsed   = _extract_json(raw_text)
 
-        # ── 5. Retry once if JSON was malformed ──────────────────────────
+        # 5. Retry once with stricter instruction if JSON was malformed
         if parsed is None:
-            raw_text = _call_gemini(model, system_prompt, user_message, image_bytes, strict=True)
-            parsed = _extract_json(raw_text)
+            raw_text = _call_gemini(model, user_message, image_bytes, strict=True)
+            parsed   = _extract_json(raw_text)
 
         if parsed is None:
             return _err(
                 persona_name,
                 f"Gemini returned malformed JSON after 2 attempts. "
-                f"Raw response (first 500 chars): {raw_text[:500]}",
+                f"Raw (first 500 chars): {raw_text[:500]}",
             )
 
-        # ── 6. Validate / normalise ──────────────────────────────────────
+        # 6. Validate
         try:
             validated = _validate(parsed, persona_name)
         except ValueError as exc:
@@ -407,7 +320,72 @@ def run_persona(
 
 
 # ---------------------------------------------------------------------------
-# Convenience wrapper — run by persona key from registry
+# Public async function — run ALL (or selected) personas CONCURRENTLY
+# ---------------------------------------------------------------------------
+
+async def run_all_personas(
+    screenshot_input: str | bytes,
+    extracted_text: str,
+    selected_names: list[str] | None = None,
+) -> list[dict]:
+    """
+    Run personas concurrently using a thread-pool executor.
+
+    Each `run_persona` call (blocking Gemini HTTP) is dispatched to a worker
+    thread so all 5 fire simultaneously.  Wall-clock time ≈ the slowest
+    single call, not 5× sequential time.
+
+    Parameters
+    ----------
+    screenshot_input : str | bytes
+        Public URL or raw PNG bytes (shared across all persona calls).
+    extracted_text : str
+        Page text from capture_agent (shared).
+    selected_names : list[str] | None
+        Optional filter by persona name (e.g. ["Skeptical Buyer", "Price-Sensitive Shopper"]).
+        Pass None (default) to run all 5.
+
+    Returns
+    -------
+    list[dict]  — one result dict per persona, in the same order as ALL_PERSONAS.
+                  Failed personas have ok=False; others are not affected.
+    """
+    # Resolve which personas to run
+    if selected_names:
+        name_set = {n.lower() for n in selected_names}
+        personas = [p for p in ALL_PERSONAS if p["name"].lower() in name_set]
+    else:
+        personas = ALL_PERSONAS
+
+    if not personas:
+        return []
+
+    # Pre-download the image bytes ONCE (shared across all threads).
+    # This avoids 5 simultaneous downloads of the same screenshot.
+    try:
+        image_bytes = await asyncio.get_event_loop().run_in_executor(
+            _EXECUTOR, _load_image_bytes, screenshot_input
+        )
+    except Exception as exc:
+        # If we can't load the image at all, fail every persona gracefully
+        return [
+            _err(p["name"], f"Failed to load screenshot: {exc}")
+            for p in personas
+        ]
+
+    # Build one coroutine per persona — each runs run_persona in a thread
+    loop = asyncio.get_event_loop()
+
+    async def _run_one(persona: dict) -> dict:
+        fn = partial(run_persona, persona, image_bytes, extracted_text)
+        return await loop.run_in_executor(_EXECUTOR, fn)
+
+    results: list[dict] = await asyncio.gather(*[_run_one(p) for p in personas])
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Convenience wrappers (backwards-compat)
 # ---------------------------------------------------------------------------
 
 def run_persona_by_key(
@@ -415,9 +393,7 @@ def run_persona_by_key(
     screenshot_input: str | bytes,
     extracted_text: str,
 ) -> dict:
-    """
-    Shorthand: run_persona_by_key('skeptical_buyer', ...).
-    """
+    """Shorthand: run_persona_by_key('skeptical_buyer', ...)."""
     persona = PERSONA_REGISTRY.get(key)
     if not persona:
         return _err(key, f"Unknown persona key '{key}'. Available: {list(PERSONA_REGISTRY)}")
@@ -425,7 +401,7 @@ def run_persona_by_key(
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Error helper
 # ---------------------------------------------------------------------------
 
 def _err(persona_name: str, message: str) -> dict:
