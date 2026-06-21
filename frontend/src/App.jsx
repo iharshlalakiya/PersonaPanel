@@ -2,6 +2,7 @@ import { Routes, Route, Navigate } from 'react-router-dom'
 import HomePage from './pages/HomePage.jsx'
 import LoginPage from './pages/LoginPage.jsx'
 import NewTestPage from './pages/NewTestPage.jsx'
+import ResultsPage from './pages/ResultsPage.jsx'
 import ProtectedRoute from './components/ProtectedRoute.jsx'
 
 export default function App() {
@@ -17,13 +18,8 @@ export default function App() {
         <ProtectedRoute><NewTestPage /></ProtectedRoute>
       } />
 
-      {/* /results/:id — page to be built next; for now navigating here shows a stub */}
       <Route path="/results/:id" element={
-        <ProtectedRoute>
-          <div className="min-h-screen bg-[#0d0d1a] flex items-center justify-center text-slate-400 text-sm">
-            Results page coming soon — session saved to Supabase ✓
-          </div>
-        </ProtectedRoute>
+        <ProtectedRoute><ResultsPage /></ProtectedRoute>
       } />
 
       {/* Catch-all */}

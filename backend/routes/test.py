@@ -289,3 +289,21 @@ async def run_all(body: RunRequest) -> RunResponse:
         synthesis=SynthesisResult(**{k: synthesis.get(k) for k in SynthesisResult.model_fields}),
         db_errors=db_result.get("errors", []),
     )
+
+# ---------------------------------------------------------------------------
+# GET /api/test/{test_id}
+# ---------------------------------------------------------------------------
+
+from db.get_results import get_test_results
+
+@router.get("/{test_id}", summary="Fetch saved test results from Supabase")
+async def get_results(test_id: str):
+    """
+    Retrieves the complete test session, persona results, and synthesis
+    from the database using the test_id (which is the test_sessions row ID).
+    """
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, get_test_results, test_id)
+    if not result["ok"]:
+        return {"ok": False, "error": result["error"]}
+    return result
